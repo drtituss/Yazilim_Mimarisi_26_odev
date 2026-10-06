@@ -1,7 +1,8 @@
 from interfaces import Source, Sink, Emitter
+from record import LogRecord
 
 class FileLineSource(Source[str]):
-    """Dosyayı satır satır okuyup boru hattına emit eden kaynak bileşen."""
+    """Dosyayı satır satır okuyup boru hattına aktaran kaynak bileşen."""
     def __init__(self, file_path: str):
         self.file_path = file_path
 
@@ -13,7 +14,7 @@ class FileLineSource(Source[str]):
         except IOError as e:
             print(f"Dosya okuma hatası: {e}")
 
-class ConsoleSink(Sink[str]):
-    """Gelen veriyi doğrudan konsola yazdıran hedef bileşen."""
-    def consume(self, item: str) -> None:
+class ConsoleSink(Sink[LogRecord]):
+    """Gelen LogRecord nesnesini tek satırda şık ve okunabilir biçimde yazdıran hedef bileşen."""
+    def consume(self, item: LogRecord) -> None:
         print(item)
