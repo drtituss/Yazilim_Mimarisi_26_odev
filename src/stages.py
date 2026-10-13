@@ -1,8 +1,9 @@
-from interfaces import Source, Sink, Emitter
-from record import LogRecord
+from typing import Any, Optional
+from interfaces import Source, Sink, Emitter, StageException
 
 class FileLineSource(Source[str]):
     """Dosyayı satır satır okuyup boru hattına aktaran kaynak bileşen."""
+
     def __init__(self, file_path: str):
         self.file_path = file_path
 
@@ -12,9 +13,40 @@ class FileLineSource(Source[str]):
                 for line in file:
                     out.emit(line.rstrip("\r\n"))
         except IOError as e:
-            print(f"Dosya okuma hatası: {e}")
+            raise StageException(f"Dosya okuma hatası ({self.file_path}): {e}")
 
-class ConsoleSink(Sink[LogRecord]):
-    """Gelen LogRecord nesnesini tek satırda şık ve okunabilir biçimde yazdıran hedef bileşen."""
-    def consume(self, item: LogRecord) -> None:
+
+class ConsoleSink(Sink[Any]):
+    """Gelen veriyi konsola yazdıran hedef bileşen."""
+
+    def consume(self, item: Any) -> None:
         print(item)
+
+
+class FileSink(Sink[Any]):
+    """
+    Çıktıyı hedef dosyaya yazan bileşen.
+    open() ve close() yaşam döngüsü kancaları sayesinde kaynak sızıntısını ve
+    arabellek kaybını (buffer loss) önler.
+    """
+
+    def __init__(self, output_path: str):
+        self.output_path = output_path
+        self._file: Optional[Any] = None
+
+    def open(self) -> None:
+        try:
+            self._file = open(self.output_path, "w", encoding="utf-8")
+        except IOError as e:
+            raise StageException(f"Çıktı dosyası açılamadı ({self.output_path}): {e}")
+
+    def consume(self, item: Any) -> None:
+        if self._file is None:
+            raise StageException("FileSink açık değil! open() çağrılmadı.")
+        self._file.write(f"{item}\n")
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.flush()
+            self._file.close()
+            self._file = None

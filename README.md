@@ -1,33 +1,30 @@
-# LogFlow Pipeline - Increment 2
+# LogFlow Pipeline - Increment 3
 
-LogFlow is an extensible log processing engine built with the **Pipes and Filters** architectural pattern.
+LogFlow is an extensible, modular log processing engine built with the **Pipes and Filters** architectural pattern.
 
 ## Project Structure
-- `src/`: Core interfaces and domain models (`interfaces.py`, `record.py`, `parser.py`, `stages.py`, `pipeline.py`, `main.py`).
-- `tests/`: Unit test suite using the `CollectingEmitter` test double (`test_parser.py`).
-- `data/`: Sample input files (`access-small.log`).
-- `ARCHITECTURE.md`: Architectural decisions, separation of concerns, and component definitions.
+- `src/`:
+  - `interfaces.py`: Core Source, Sink, Stage, and Emitter abstractions.
+  - `record.py`: Immutable `LogRecord` domain model.
+  - `parser.py`: Common Log Format (CLF) parser stage.
+  - `filters.py`: `PredicateFilterStage` and `ProjectionStage`.
+  - `stages.py`: `FileLineSource`, `ConsoleSink`, and `FileSink`.
+  - `pipeline.py`: Pipeline execution engine and fluent `PipelineBuilder`.
+  - `main.py`: Configurable command-line interface (CLI).
+- `tests/`:
+  - `test_parser.py`: Parser stage unit tests with 8 distinct edge cases.
+  - `test_stages.py`: Unit tests for PredicateFilter, Projection, and FileSink lifecycle.
+  - `test_integration.py`: End-to-end integration test validating pipeline output.
+- `ARCHITECTURE.md`: Architectural documentation and Stage Ordering experiment analysis.
+
+---
 
 ## How to Run
 
-### Run the Pipeline
+### Command-Line Interface (CLI)
 ```bash
-python src/main.py data/access-small.log
+# Filter by status code and print to console
+python src/main.py data/access-small.log --min-status 400
 
-```bash
-python -m unittest discover -s tests
-
-File,Statements,Miss,Coverage
-src/interfaces.py,27,6,78%
-src/parser.py,29,1,97%
-src/record.py,17,2,88%
-tests/test_parser.py,66,1,98%
-TOTAL,139,10,93%
-
-Change Log (Increment 2)
-## Değişiklik Günlüğü (Increment 2)
-- **Eklenen `src/record.py`:** Değişmez `LogRecord` alan modeli ve gelecekteki genişlemeler için `attributes` sözlüğü eklendi.
-- **Eklenen `src/parser.py`:** Common Log Format (CLF) ayrıştırıcısı yazıldı; hatalı satırlar sayılıp atlanıyor.
-- **Eklenen `tests/test_parser.py`:** Dosya okumadan bellekte çalışan 8 adet birim testi eklendi.
-- **Güncellenen `src/stages.py`:** `ConsoleSink` artık ham metin yerine `LogRecord` nesnesi kabul ediyor.
-- **Güncellenen `src/pipeline.py` & `src/main.py`:** Ayrıştırıcı aşama kaynak ile hedef arasına bağlandı.
+# Filter by prefix and project specific fields to a file
+python src/main.py data/access-small.log --path-prefix /api --fields timestamp,client_ip,status,path -o data/output.log

@@ -21,17 +21,28 @@ class Pipeline:
         return self
 
     def run(self) -> None:
-        # 1. Yaşam döngüsü: Varsa tüm aşamaların open() metodunu tetikle
+        # 1. Yaşam döngüsü: Varsa open() metodlarını güvenle tetikle
+        if hasattr(self.source, 'open'):
+            self.source.open()
         for stage in self.stages:
-            stage.open()
+            if hasattr(stage, 'open'):
+                stage.open()
+        if hasattr(self.sink, 'open'):
+            self.sink.open()
 
-        # 2. Kaynaktan üretimi başlat ve ilk aşamaya yönlendir
-        emitter = _CallbackEmitter(lambda item: self._dispatch(item, 0))
-        self.source.produce(emitter)
-
-        # 3. Yaşam döngüsü: Akış bittiğinde close() metodlarını tetikle
-        for stage in self.stages:
-            stage.close()
+        try:
+            # 2. Kaynaktan üretimi başlat ve ilk aşamaya yönlendir
+            emitter = _CallbackEmitter(lambda item: self._dispatch(item, 0))
+            self.source.produce(emitter)
+        finally:
+            # 3. Yaşam döngüsü: Varsa close() metodlarını güvenle tetikle
+            for stage in self.stages:
+                if hasattr(stage, 'close'):
+                    stage.close()
+            if hasattr(self.sink, 'close'):
+                self.sink.close()
+            if hasattr(self.source, 'close'):
+                self.source.close()
 
     def _dispatch(self, current_item: Any, stage_index: int) -> None:
         if stage_index >= len(self.stages):
@@ -44,3 +55,27 @@ class Pipeline:
             current_stage.process(current_item, next_emitter)
         except StageException as e:
             print(f"Pipeline işlem hatası: {e}")
+
+
+class PipelineBuilder:
+    """
+    Akıcı (Fluent) Pipeline kurucu sınıfı.
+    Pipeline bileşenlerinin zincirleme metotlarla kurulmasını sağlar.
+    """
+    def __init__(self, source: Source[Any]):
+        self._source = source
+        self._stages: List[Stage[Any, Any]] = []
+
+    @classmethod
+    def from_source(cls, source: Source[Any]) -> 'PipelineBuilder':
+        return cls(source)
+
+    def via(self, stage: Stage[Any, Any]) -> 'PipelineBuilder':
+        self._stages.append(stage)
+        return self
+
+    def to(self, sink: Sink[Any]) -> Pipeline:
+        pipeline = Pipeline(self._source, sink)
+        for stage in self._stages:
+            pipeline.add_stage(stage)
+        return pipeline
