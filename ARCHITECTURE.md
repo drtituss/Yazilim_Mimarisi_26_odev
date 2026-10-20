@@ -1,45 +1,70 @@
-# Architectural Overview - Increment 3: Composition, Stages & PipelineBuilder
+# Architectural Overview - Increment 4: Declarative Configuration & Stage Registry
 
-## Multi-Stage Pipeline Architecture Diagram
+## Declarative Architecture Diagram
 ```
-+------------------+         +---------------+         +------------------------+         +-----------------+         +-------------+
-|  FileLineSource  | --str-> |  ParserStage  | -Record-> | PredicateFilterStage   | -Record-> | ProjectionStage | -Dict->   |  FileSink   |
-| (Source / Disk)  |         | (Parse to Rec)|         | (e.g. status >= 400)   |         | (Minimization)  |           | (Sink/Disk) |
-+------------------+         +---------------+         +------------------------+         +-----------------+         +-------------+
+                          +-------------------------+
+                          |   pipeline.yaml (DSL)   |
+                          +-------------------------+
+                                       |
+                                       v
+                             [ PipelineLoader ]  <--- (Fail Fast Validation)
+                                       |
+                     +-----------------+-----------------+
+                     |                                   |
+                     v                                   v
+             [ StageRegistry ]                  [ PipelineBuilder ]
+           (Dynamic Factory Map)                         |
+                     |                                   v
+                     +----------------------------> [ Pipeline Engine ]
+                                                         |
+                  +--------------------------------------+--------------------------------------+
+                  |                                      |                                      |
+                  v                                      v                                      v
+         [ FileLineSource ]                     [ Processing Stages ]                     [ FileSink ]
 ```
 
 ---
 
 ## Architectural Concepts
 
-### 1. Fluent PipelineBuilder Pattern
-- Aşamaların birbirine manuel bağlanması yerine Akıcı Arayüz (Fluent Interface) deseni geliştirilmiştir.
-- `PipelineBuilder.from_source(source).via(stage1).via(stage2).to(sink)` zinciri okunabilirliği ve bileşilebilirliği (composability) artırır.
+### 1. Separation of Architectural Definition from Implementation
+- İşlem hattının topolojisi ve veri akışı koddan soyutlanarak bildirimsel (declarative) YAML dosyalarına aktarılmıştır.
+- **Kilometre Taşı Avantajı:** Yeni bir filtreleme veya analiz boru hattı kurmak için kod değişikliği veya yeniden derleme/dağıtım gerekmez; yalnızca yeni bir YAML yapılandırma dosyası tanımlanır.
 
-### 2. Lifecycle Hooks & Resource Safety
-- `FileSink` bileşeni `open()` ve `close()` kancalarını uygular.
-- `Pipeline.run()` içerisindeki `try ... finally` güvencesi sayesinde, ara aşamalarda hata meydana gelse dahi `close()` kancası tetiklenir, işletim sistemi tamponundaki (buffer) log verileri diske yazılır ve kaynak sızıntısı önlenir.
+### 2. Stage Registry Pattern (Veri Odaklı Eşleme)
+- Kod içinde katı, sabit kodlanmış (`hardcoded`) `switch-case` veya zincirleme `if-else` blokları kullanılmamıştır.
+- `StageRegistry` sınıfı, aşama adlarını karşılık gelen fabrika (factory) fonksiyonlarına bir sözlük eşlemi (`Map/Dictionary`) üzerinden bağlar.
+- Yeni bir aşama eklendiğinde yalnızca `register_stage` metoduyla kayıt defterine tanımlanması yeterlidir (Açık/Kapalı Prensibi - OCP).
+
+### 3. Fail Fast, Fail Loudly (Erken ve Gürültülü Başarısızlık)
+- **Yapılandırma Zamanı (Config-Time) Hataları:** Dosya yolu eksikliği, bilinmeyen aşama adı, eksik parametre (`op`, `field` vb.) veya hatalı veri tipleri boru hattı inşa edilmeden önce `PipelineLoader` tarafından yakalanır ve net bir `ConfigurationError` fırlatılır. Tek bir satır log dahi işlenmeden süreç güvenle durdurulur.
+- **Çalışma Zamanı (Runtime) Veri Hataları:** Bozuk log satırları veya ağ/disk kesintileri ise veri akışı esnasında `StageException` ile yönetilir.
 
 ---
 
-## Stage Ordering Experiment & Trade-off Analysis (Sıralama Deneyi ve Ödünleşim)
+## Configuration Schema (YAML Şeması)
 
-Boru hattı bileşenlerinin yer değiştirilebilirliği (composability) deneysel olarak test edilmiş ve şu sonuçlara ulaşılmıştır:
-
-### 1. Ayrıştırma Öncesi Filtreleme İmkânsızlığı
-- `FileLineSource` ham `str` üretirken, `PredicateFilterStage` tip güvenli `LogRecord` alanlarını (ör. `r.status`, `r.path`) denetler.
-- Dolayısıyla `ParserStage` her zaman mantıksal filtrelerden önce gelmek zorundadır.
-
-### 2. Filtreleme ve Projeksiyon Sıralaması (Filter vs. Projection Trade-off)
-İki farklı çalıştırma sırası test edilmiştir:
-- **Sıra A (Önce Filtre, Sonra Projeksiyon):** `Parser -> PredicateFilterStage -> ProjectionStage -> FileSink`
-- **Sıra B (Önce Projeksiyon, Sonra Filtre):** `Parser -> ProjectionStage -> PredicateFilterStage -> FileSink`
-
-#### Sonuç ve Ödünleşim Karşılaştırması:
-1. **İşlevsel Eşdeğerlik:** İki sıra da doğru konfigüre edildiğinde nihai çıktı kümesi olarak **aynı sonuçları üretir**.
-2. **Performans ve Bellek Verimliliği:** 
-   - **Sıra A çok daha üstündür.** Koşulu sağlamayan kayıtlar (ör. 10.000 kaydın %90'ı) henüz filtre aşamasındayken elenir. Bu sayede elenen kayıtlar için gereksiz yere `dict` projeksiyonu oluşturulmaz, bellek tahsisi (allocation) yapılmaz ve CPU döngüsü harcanmaz.
-   - **Sıra B'de** ise tüm kayıtlar önce gereksiz yere projeksiyon işlemine tabi tutulur, ardından elenir; bu da yüksek veri akışında ciddi bir performans kaybına yol açar.
-3. **Tip Güvenliği Bağımlılığı:** 
-   - Filtreleme önce yapıldığında `PredicateFilterStage` doğrudan tip güvenli `LogRecord` üzerinde çalışır.
-   - Projeksiyon öne alınırsa kayıt artık `dict` tipine dönüşeceğinden, filtrenin ihtiyaç duyduğu alanlar projeksiyonda unutulduğu takdirde filtre `KeyError` verir veya hatalı çalışır.
+```yaml
+pipeline:
+  name: <string>              # Boru hattı kimliği/açıklaması
+  source:
+    type: file                # Kaynak tipi: 'file'
+    params:
+      path: <string>          # Okunacak dosya yolu
+  stages:
+    - type: parse             # Ayrıştırıcı aşama
+      params:
+        format: clf           # Desteklenen format: 'clf'
+    - type: filter            # Koşullu filtreleme
+      params:
+        field: <string>       # LogRecord alanı (status, path, bytes vb.)
+        op: <string>          # Karşılaştırma operatörü: '>=', '<=', '==', '!=', 'startswith', 'contains'
+        value: <any>          # Karşılaştırma değeri
+    - type: project           # Veri minimizasyonu / projeksiyon
+      params:
+        fields: [<string>]    # Seçilecek alan listesi
+  sink:
+    type: file | console      # Hedef bileşen tipi
+    params:
+      path: <string>          # Çıktı dosya yolu ('file' seçildiyse zorunlu)
+```

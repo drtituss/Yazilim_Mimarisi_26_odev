@@ -1,30 +1,40 @@
-# LogFlow Pipeline - Increment 3
+# LogFlow Pipeline - Increment 4
 
-LogFlow is an extensible, modular log processing engine built with the **Pipes and Filters** architectural pattern.
+LogFlow is an extensible, modular log processing engine built with the **Pipes and Filters** architectural pattern and driven by declarative YAML configurations.
 
 ## Project Structure
 - `src/`:
-  - `interfaces.py`: Core Source, Sink, Stage, and Emitter abstractions.
+  - `interfaces.py`: Core Source, Sink, Stage abstractions and `ConfigurationError`.
   - `record.py`: Immutable `LogRecord` domain model.
   - `parser.py`: Common Log Format (CLF) parser stage.
-  - `filters.py`: `PredicateFilterStage` and `ProjectionStage`.
+  - `filters.py`: `PredicateFilterStage` (condition-based) and `ProjectionStage`.
   - `stages.py`: `FileLineSource`, `ConsoleSink`, and `FileSink`.
   - `pipeline.py`: Pipeline execution engine and fluent `PipelineBuilder`.
-  - `main.py`: Configurable command-line interface (CLI).
+  - `registry.py`: Data-driven `StageRegistry` mapping stage names to factories.
+  - `loader.py`: Declarative YAML loader with fail-fast validation.
+  - `main.py`: CLI entry point supporting both `--config` and manual arguments.
+- `configs/`:
+  - `error-report.yaml`: Filters HTTP status >= 400.
+  - `api-traffic.yaml`: Extracts `/api` traffic.
+  - `bandwidth-client.yaml`: Extracts client bandwidth for requests > 500 bytes.
 - `tests/`:
-  - `test_parser.py`: Parser stage unit tests with 8 distinct edge cases.
-  - `test_stages.py`: Unit tests for PredicateFilter, Projection, and FileSink lifecycle.
-  - `test_integration.py`: End-to-end integration test validating pipeline output.
-- `ARCHITECTURE.md`: Architectural documentation and Stage Ordering experiment analysis.
+  - `test_parser.py`: Parser unit tests (8 edge cases).
+  - `test_stages.py`: Unit tests for PredicateFilter, Projection, and FileSink.
+  - `test_integration.py`: End-to-end integration test.
+  - `test_loader.py`: Validation tests for declarative configuration loader.
+- `ARCHITECTURE.md`: Architectural documentation, registry design, and YAML schema.
 
 ---
 
 ## How to Run
 
-### Command-Line Interface (CLI)
+### Run Pre-Configured Declarative Pipelines
 ```bash
-# Filter by status code and print to console
-python src/main.py data/access-small.log --min-status 400
+# 1. Error Report
+python src/main.py --config configs/error-report.yaml
 
-# Filter by prefix and project specific fields to a file
-python src/main.py data/access-small.log --path-prefix /api --fields timestamp,client_ip,status,path -o data/output.log
+# 2. API Traffic Extract
+python src/main.py --config configs/api-traffic.yaml
+
+# 3. Client Bandwidth Extract
+python src/main.py --config configs/bandwidth-client.yaml

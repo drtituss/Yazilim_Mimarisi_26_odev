@@ -9,6 +9,10 @@ class StageException(Exception):
     """Pipeline aşamalarında meydana gelen özel hata türü."""
     pass
 
+class ConfigurationError(Exception):
+    """Yapılandırma dosyasındaki sözdizimi, eksik alan, geçersiz aşama veya tip hatalarında fırlatılır."""
+    pass
+
 class Emitter(ABC, Generic[T]):
     """Veriyi bir sonraki aşamaya ileten arayüz."""
     @abstractmethod
