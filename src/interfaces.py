@@ -1,17 +1,34 @@
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
+from enum import Enum
 
 I = TypeVar('I')
 O = TypeVar('O')
 T = TypeVar('T')
 
-class StageException(Exception):
-    """Pipeline aşamalarında meydana gelen özel hata türü."""
-    pass
-
 class ConfigurationError(Exception):
     """Yapılandırma dosyasındaki sözdizimi, eksik alan, geçersiz aşama veya tip hatalarında fırlatılır."""
     pass
+
+class StageException(Exception):
+    """
+    Bir aşamada tek bir kayıt işlenirken hata oluştuğunda fırlatılır (Kurtarılabilir hata).
+    """
+    pass
+
+class PipelineException(Exception):
+    """
+    İşlem hattı devam edemez duruma geldiğinde fırlatılır (Kurtarılamaz hata).
+    Örnek: Okunamayan dosya, diskin dolması, yetki hatası.
+    """
+    pass
+
+class ErrorPolicy(Enum):
+    """Aşama bazında uygulanabilecek hata yönetim politikaları."""
+    FAIL_FAST = "FAIL_FAST"         # Çalıştırmayı anında durdur ve çöktür.
+    SKIP = "SKIP"                   # Hatalı kaydı atla, sayısını tut, akışa devam et.
+    DEAD_LETTER = "DEAD_LETTER"     # Hatalı kaydı ikincil bir hedefe (Dead-Letter Channel) gönder.
+    RETRY = "RETRY"                 # İşlemi tekrar dene (Gelecek haftalarda I/O için kullanılacak).
 
 class Emitter(ABC, Generic[T]):
     """Veriyi bir sonraki aşamaya ileten arayüz."""
@@ -21,16 +38,18 @@ class Emitter(ABC, Generic[T]):
 
 class Stage(ABC, Generic[I, O]):
     """Veriyi işleyen aşama / filtre arayüzü."""
+    
+    def __init__(self, error_policy: ErrorPolicy = ErrorPolicy.FAIL_FAST):
+        self.error_policy = error_policy
+
     @abstractmethod
     def process(self, input_item: I, out: Emitter[O]) -> None:
         pass
 
     def open(self) -> None:
-        """Yaşam döngüsü kancası (gerekli kaynakları açmak için)."""
         pass
 
     def close(self) -> None:
-        """Yaşam döngüsü kancası (kaynakları kapatmak için)."""
         pass
 
 class Source(ABC, Generic[O]):

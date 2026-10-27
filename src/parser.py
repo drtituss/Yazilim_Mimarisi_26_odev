@@ -1,52 +1,48 @@
 import re
 from datetime import datetime
-from interfaces import Stage, Emitter, StageException
+from typing import Any
+from interfaces import Stage, Emitter, StageException, ErrorPolicy
 from record import LogRecord
 
-class ParserStage(Stage[str, LogRecord]):
-    """Ham log satırlarını ayrıştırıp LogRecord nesnelerine dönüştüren aşama."""
-
-    # Common Log Format (CLF) + opsiyonel User Agent deseni
-    CLF_REGEX = re.compile(
-        r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"([A-Z]+)\s+(\S+)\s+HTTP/[^"]+"\s+(\d{3})\s+(\d+|-)(?:\s+"([^"]*)")?'
+class ParserStage(Stage[Any, LogRecord]):
+    """Common Log Format (CLF) ayrıştırıcısı. Hatalı satırlarda StageException fırlatır."""
+    
+    LOG_PATTERN = re.compile(
+        r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<timestamp>[^\]]+)\]\s+"(?P<method>\S+)\s+(?P<path>\S+)\s+(?P<protocol>[^"]+)"\s+(?P<status>\d+)\s+(?P<bytes>-|\d+)\s+"(?P<user_agent>[^"]*)"$'
     )
 
-    def __init__(self):
-        self.error_count = 0
+    def __init__(self, error_policy: ErrorPolicy = ErrorPolicy.DEAD_LETTER):
+        # Varsayılan politika olarak hatalı kayıtları Dead-Letter kanalına gönder
+        super().__init__(error_policy)
 
-    def process(self, input_item: str, out: Emitter[LogRecord]) -> None:
-        line = input_item.strip()
+    def process(self, input_item: Any, out: Emitter[LogRecord]) -> None:
+        line = str(input_item).strip()
+        
         if not line:
-            self.error_count += 1
-            return
+            raise StageException("Satır tamamen boş.")
 
-        match = self.CLF_REGEX.match(line)
+        match = self.LOG_PATTERN.match(line)
         if not match:
-            self.error_count += 1
-            return
-
-        client_ip, raw_time, method, path, raw_status, raw_bytes, user_agent = match.groups()
+            # ÖNCEKİ GİBİ SESSİZCE ATLAMAYIP HATA FIRLATIYORUZ (Fail Fast veya Dead-Letter için)
+            raise StageException("CLF (Common Log Format) regex eşleşmedi veya bozuk satır.")
 
         try:
-            timestamp = datetime.strptime(raw_time, "%d/%b/%Y:%H:%M:%S %z")
-            status = int(raw_status)
-            bytes_sent = 0 if raw_bytes == "-" else int(raw_bytes)
-            ua = user_agent if user_agent else "-"
+            data = match.groupdict()
+            ts_str = data["timestamp"].split(" ")[0]
+            ts = datetime.strptime(ts_str, "%d/%b/%Y:%H:%M:%S")
+            status = int(data["status"])
+            bytes_val = 0 if data["bytes"] == "-" else int(data["bytes"])
 
             record = LogRecord(
-                timestamp=timestamp,
-                client_ip=client_ip,
-                method=method,
-                path=path,
+                timestamp=ts,
+                client_ip=data["ip"],
+                method=data["method"],
+                path=data["path"],
                 status=status,
-                bytes=bytes_sent,
-                user_agent=ua,
-                raw=input_item
+                bytes=bytes_val,
+                user_agent=data["user_agent"],
+                raw=line
             )
             out.emit(record)
-
-        except (ValueError, Exception):
-            self.error_count += 1
-
-    def close(self) -> None:
-        print(f"\n[Parser] İşlem tamamlandı. Toplam atlanan/hatalı satır sayısı: {self.error_count}")
+        except Exception as e:
+            raise StageException(f"Veri dönüşüm hatası (Tarih/Sayı): {e}")

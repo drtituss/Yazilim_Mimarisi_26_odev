@@ -1,10 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Any
 
 @dataclass(frozen=True)
 class LogRecord:
-    """Boru hattı boyunca taşınan değişmez (immutable) alan modeli."""
+    """Ayrıştırılmış ve doğrulanmış yapısal log verisini temsil eden değişmez (immutable) veri modeli."""
     timestamp: datetime
     client_ip: str
     method: str
@@ -12,9 +12,22 @@ class LogRecord:
     status: int
     bytes: int
     user_agent: str
-    attributes: Dict[str, str] = field(default_factory=dict)  # 5-7. haftalar için genişleme noktası
-    raw: str = ""
+    raw: str
+    attributes: Dict[str, Any] = field(default_factory=dict)
 
-    def __str__(self) -> str:
-        time_str = self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        return f"[{time_str}] {self.client_ip} -> {self.method} {self.path} ({self.status}) - {self.bytes}B - UA: '{self.user_agent}'"
+@dataclass(frozen=True)
+class FailedRecord:
+    """
+    Dead-Letter Kanalına (DLC) gönderilecek olan hatalı kayıt modeli.
+    Kaydın ham verisini, hatanın oluştuğu aşamayı, istisna detayını ve zamanını içerir.
+    """
+    raw_input: Any
+    stage_name: str
+    exception: str
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    def to_csv_line(self) -> str:
+        """Hata dosyasında okunabilirliği artırmak için CSV benzeri basit bir format döner."""
+        # Yeni satır karakterlerini temizleyerek tek satıra sığdır
+        clean_raw = str(self.raw_input).replace('\n', '\\n').replace('\r', '')
+        return f"[{self.timestamp.isoformat()}] STAGE: {self.stage_name} | ERROR: {self.exception} | RAW: {clean_raw}"

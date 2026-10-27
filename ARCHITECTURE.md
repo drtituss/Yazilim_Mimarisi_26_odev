@@ -1,70 +1,39 @@
-# Architectural Overview - Increment 4: Declarative Configuration & Stage Registry
+# Architectural Overview - Increment 5: Error Management & Dead-Letter Channel
 
-## Declarative Architecture Diagram
+## 1. Error Model (Hata Modeli ve Yalıtımı)
+Hata yönetimi sadece bir `try/catch` bloğu değil, mimari bir karardır. Sistemde iki farklı istisna seviyesi tasarlanmıştır:
+* **`StageException` (Kurtarılabilir Hata):** Tek bir kayıt (log satırı) işlenirken ayrıştırma, format veya doğrulama ihlali oluştuğunda fırlatılır. İşlem hattı çöktürülmez; kayıt hatalı işaretlenerek yapılandırılan `ErrorPolicy`'ye (örn. `DEAD_LETTER` veya `SKIP`) devredilir.
+* **`PipelineException` (Kurtarılamaz Kritik Hata):** Dosyanın bulunamaması, diskin dolması, yetki eksikliği veya konfigürasyon hataları gibi tüm sistemin devamlılığını tehdit eden durumlarda fırlatılır. `FAIL_FAST` ilkesi gereği boru hattı anında durdurulur ve çöktürülür.
+
+## 2. Topoloji: Dead-Letter Channel (İkincil Çıktı Yolu)
+Hata yönlendirmesi bir topolojik karardır. Boru hattı (pipeline) artık düz bir çizgi olmaktan çıkmış, hatalı kayıtlar için tasarlanmış ikincil bir rotaya (Y-ayrımına) sahip olmuştur.
+
+```text
+                           [ FileLineSource ] (errors="replace")
+                                  |
+                                  v
+                            [ ParserStage ] --(StageException + DEAD_LETTER)--> [ DeadLetterFileSink ]
+                                  |                                                (out/dead-letter.log)
+                                  v
+                          [ ValidationStage ] --(StageException + DEAD_LETTER)--> [ DeadLetterFileSink ]
+                                  |
+                                  v
+                           [ Filter & Project ]
+                                  |
+                                  v
+                             [ FileSink ] (Ana Hedef)
 ```
-                          +-------------------------+
-                          |   pipeline.yaml (DSL)   |
-                          +-------------------------+
-                                       |
-                                       v
-                             [ PipelineLoader ]  <--- (Fail Fast Validation)
-                                       |
-                     +-----------------+-----------------+
-                     |                                   |
-                     v                                   v
-             [ StageRegistry ]                  [ PipelineBuilder ]
-           (Dynamic Factory Map)                         |
-                     |                                   v
-                     +----------------------------> [ Pipeline Engine ]
-                                                         |
-                  +--------------------------------------+--------------------------------------+
-                  |                                      |                                      |
-                  v                                      v                                      v
-         [ FileLineSource ]                     [ Processing Stages ]                     [ FileSink ]
-```
 
----
+## 3. Chaos Test Error Policy Mapping (Kaos Testi Hata Tablosu)
+Bozuk veri setindeki (`access-dirty.log`) kayıtların sistem tarafından nasıl yönetildiği aşağıda eşleştirilmiştir:
 
-## Architectural Concepts
+| Hata Türü (Bozuk Veri) | Yakalayan Aşama | Uygulanan Politika | Sonuç (Yönlendirme) |
+| :--- | :--- | :--- | :--- |
+| UTF-8 Olmayan Bayt (`0xff`) | `FileLineSource` (Replace) + `ParserStage` | `DEAD_LETTER` (Parser Regex İhlali) | `out/dead-letter.log` |
+| Kesilmiş / Yarım Satır | `ParserStage` | `DEAD_LETTER` (Regex Eşleşmemesi)| `out/dead-letter.log` |
+| Boş Dosya / Boş Satır | `ParserStage` | `DEAD_LETTER` (Boş İçerik Hatası)| `out/dead-letter.log` |
+| Negatif Bayt Değeri | `ParserStage` veya `ValidationStage` | `DEAD_LETTER` | `out/dead-letter.log` |
+| 1970 veya 2099 Zaman Damgası | `ValidationStage` | `DEAD_LETTER` (Aralık İhlali) | `out/dead-letter.log` |
+| Geçersiz IP Biçimi | `ValidationStage` | `DEAD_LETTER` (Regex İhlali) | `out/dead-letter.log` |
 
-### 1. Separation of Architectural Definition from Implementation
-- İşlem hattının topolojisi ve veri akışı koddan soyutlanarak bildirimsel (declarative) YAML dosyalarına aktarılmıştır.
-- **Kilometre Taşı Avantajı:** Yeni bir filtreleme veya analiz boru hattı kurmak için kod değişikliği veya yeniden derleme/dağıtım gerekmez; yalnızca yeni bir YAML yapılandırma dosyası tanımlanır.
-
-### 2. Stage Registry Pattern (Veri Odaklı Eşleme)
-- Kod içinde katı, sabit kodlanmış (`hardcoded`) `switch-case` veya zincirleme `if-else` blokları kullanılmamıştır.
-- `StageRegistry` sınıfı, aşama adlarını karşılık gelen fabrika (factory) fonksiyonlarına bir sözlük eşlemi (`Map/Dictionary`) üzerinden bağlar.
-- Yeni bir aşama eklendiğinde yalnızca `register_stage` metoduyla kayıt defterine tanımlanması yeterlidir (Açık/Kapalı Prensibi - OCP).
-
-### 3. Fail Fast, Fail Loudly (Erken ve Gürültülü Başarısızlık)
-- **Yapılandırma Zamanı (Config-Time) Hataları:** Dosya yolu eksikliği, bilinmeyen aşama adı, eksik parametre (`op`, `field` vb.) veya hatalı veri tipleri boru hattı inşa edilmeden önce `PipelineLoader` tarafından yakalanır ve net bir `ConfigurationError` fırlatılır. Tek bir satır log dahi işlenmeden süreç güvenle durdurulur.
-- **Çalışma Zamanı (Runtime) Veri Hataları:** Bozuk log satırları veya ağ/disk kesintileri ise veri akışı esnasında `StageException` ile yönetilir.
-
----
-
-## Configuration Schema (YAML Şeması)
-
-```yaml
-pipeline:
-  name: <string>              # Boru hattı kimliği/açıklaması
-  source:
-    type: file                # Kaynak tipi: 'file'
-    params:
-      path: <string>          # Okunacak dosya yolu
-  stages:
-    - type: parse             # Ayrıştırıcı aşama
-      params:
-        format: clf           # Desteklenen format: 'clf'
-    - type: filter            # Koşullu filtreleme
-      params:
-        field: <string>       # LogRecord alanı (status, path, bytes vb.)
-        op: <string>          # Karşılaştırma operatörü: '>=', '<=', '==', '!=', 'startswith', 'contains'
-        value: <any>          # Karşılaştırma değeri
-    - type: project           # Veri minimizasyonu / projeksiyon
-      params:
-        fields: [<string>]    # Seçilecek alan listesi
-  sink:
-    type: file | console      # Hedef bileşen tipi
-    params:
-      path: <string>          # Çıktı dosya yolu ('file' seçildiyse zorunlu)
-```
+*Not: Sistem hiçbir hata senaryosunda çökmeyerek (graceful degradation) çalışmasını tamamlamış ve `RunSummary` üzerinden tüm bozuk satırları hesaba katmıştır.*                                                                                                                                                                                              

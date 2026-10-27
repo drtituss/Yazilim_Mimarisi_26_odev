@@ -1,0 +1,33 @@
+pipeline:
+  name: chaos-validation-pipeline
+  source:
+    type: file
+    params:
+      path: data/access-dirty.log
+  dead_letter_sink:
+    type: dead_letter_file
+    params:
+      path: out/dead-letter.log
+  stages:
+    - type: parse
+      params:
+        format: clf
+        error_policy: DEAD_LETTER    # Bozuk log satırlarını Dead-Letter'a yolla
+    - type: validate
+      params:
+        error_policy: DEAD_LETTER    # Doğrulama hatalarını Dead-Letter'a yolla
+        rules:
+          required_fields:
+            - client_ip
+            - status
+          numeric_ranges:
+            bytes:
+              min: 0                 # Negatif baytları engelle
+          check_ip_format: true      # IP adresi formatını doğrula
+          timestamp_rules:
+            min_year: 2000           # 1970 gibi eski tarihli olanları engelle
+            max_year: 2026           # 2099 gibi gelecek tarihli olanları engelle
+  sink:
+    type: file
+    params:
+      path: out/clean-output.txt

@@ -1,52 +1,64 @@
-from typing import Any, Optional
-from interfaces import Source, Sink, Emitter, StageException
+import sys
+from interfaces import Source, Sink
+from record import FailedRecord
 
 class FileLineSource(Source[str]):
-    """Dosyayı satır satır okuyup boru hattına aktaran kaynak bileşen."""
-
-    def __init__(self, file_path: str):
-        self.file_path = file_path
-
-    def produce(self, out: Emitter[str]) -> None:
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as file:
-                for line in file:
-                    out.emit(line.rstrip("\r\n"))
-        except IOError as e:
-            raise StageException(f"Dosya okuma hatası ({self.file_path}): {e}")
-
-
-class ConsoleSink(Sink[Any]):
-    """Gelen veriyi konsola yazdıran hedef bileşen."""
-
-    def consume(self, item: Any) -> None:
-        print(item)
-
-
-class FileSink(Sink[Any]):
-    """
-    Çıktıyı hedef dosyaya yazan bileşen.
-    open() ve close() yaşam döngüsü kancaları sayesinde kaynak sızıntısını ve
-    arabellek kaybını (buffer loss) önler.
-    """
-
-    def __init__(self, output_path: str):
-        self.output_path = output_path
-        self._file: Optional[Any] = None
+    """Dosyadan satır satır okuyan kaynak bileşeni."""
+    def __init__(self, path: str):
+        self.path = path
+        self.file = None
 
     def open(self) -> None:
-        try:
-            self._file = open(self.output_path, "w", encoding="utf-8")
-        except IOError as e:
-            raise StageException(f"Çıktı dosyası açılamadı ({self.output_path}): {e}")
-
-    def consume(self, item: Any) -> None:
-        if self._file is None:
-            raise StageException("FileSink açık değil! open() çağrılmadı.")
-        self._file.write(f"{item}\n")
+        # errors="replace" EKLENDİ: UTF-8 olmayan bozuk baytlar çökertmek yerine replace edilir
+        self.file = open(self.path, "r", encoding="utf-8", errors="replace")
 
     def close(self) -> None:
-        if self._file is not None:
-            self._file.flush()
-            self._file.close()
-            self._file = None
+        if self.file:
+            self.file.close()
+
+    def produce(self, out) -> None:
+        if self.file:
+            for line in self.file:
+                out.emit(line.strip())
+
+class ConsoleSink(Sink[str]):
+    """Veriyi konsola yazdıran hedef bileşen."""
+    def consume(self, item: str) -> None:
+        print(item)
+
+class FileSink(Sink[str]):
+    """Veriyi dosyaya yazdıran hedef bileşen."""
+    def __init__(self, path: str):
+        self.path = path
+        self.file = None
+
+    def open(self) -> None:
+        self.file = open(self.path, "w", encoding="utf-8")
+
+    def close(self) -> None:
+        if self.file:
+            self.file.close()
+
+    def consume(self, item: str) -> None:
+        if self.file:
+            self.file.write(str(item) + "\n")
+
+class DeadLetterFileSink(Sink[FailedRecord]):
+    """
+    Hatalı kayıtları (FailedRecord) ikincil bir hedefe (dosyaya) yazan Dead-Letter Kanalı (DLC) bileşeni.
+    """
+    def __init__(self, path: str):
+        self.path = path
+        self.file = None
+
+    def open(self) -> None:
+        self.file = open(self.path, "w", encoding="utf-8")
+        self.file.write("--- DEAD LETTER CHANNEL LOGS ---\n")
+
+    def close(self) -> None:
+        if self.file:
+            self.file.close()
+
+    def consume(self, item: FailedRecord) -> None:
+        if self.file:
+            self.file.write(item.to_csv_line() + "\n")

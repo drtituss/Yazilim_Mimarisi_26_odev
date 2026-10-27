@@ -38,3 +38,11 @@ python src/main.py --config configs/api-traffic.yaml
 
 # 3. Client Bandwidth Extract
 python src/main.py --config configs/bandwidth-client.yaml
+
+## Change Log (Increment 5)
+- **Error Model Re-designed:** Introduced `StageException` for record-level failures and `PipelineException` for unrecoverable pipeline failures.
+- **Error Policies:** Implemented declarative error policies (`FAIL_FAST`, `SKIP`, `DEAD_LETTER`, `RETRY`) configurable per stage.
+- **Dead-Letter Channel (DLC):** Created `FailedRecord` domain model and `DeadLetterFileSink` to route corrupted or invalid records to a secondary destination without halting the pipeline.
+- **Validation Stage:** Added declarative schema and data validation (IP formatting, numeric bounds, timestamp logic).
+- **Run Summary:** Built an operational summary tracking total incoming, outgoing, dropped (by stage), dead-letter counts, and elapsed execution time.
+- **Chaos Resilience (Dirty Test):** Proven system resilience against non-UTF8 bytes, truncated lines, negative numbers, and logic flaws gracefully via topological routing.
